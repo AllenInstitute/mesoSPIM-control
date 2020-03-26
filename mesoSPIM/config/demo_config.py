@@ -48,12 +48,24 @@ laser = 'Demo' # 'Demo' or 'NI'
 ''' The laserdict keys are the laser designation that will be shown
 in the user interface '''
 
+'''
+# Laser dict for NI-controlled lasers
 laserdict = {'405 nm': 'PXI6733/port0/line2',
              '488 nm': 'PXI6733/port0/line3',
              '515 nm': 'PXI6733/port0/line4',
              '561 nm': 'PXI6733/port0/line5',
              '594 nm': 'PXI6733/port0/line6',
              '647 nm': 'PXI6733/port0/line7'}
+'''
+
+# NicoLase laser dict
+# Key is laser name
+# Value is serial command to send to NicoLase to activate that laser
+laserdict = {'405 nm': 'M B000001',
+             '488 nm': 'M B000010',
+             '552 nm': 'M B000100',
+             '594 nm': 'M B001000',
+             '647 nm': 'M B010000'}
 
 '''
 Assignment of the analog outputs of the Laser card to the channels

@@ -2023,3 +2023,273 @@ class mesoSPIM_PI_rotzf_and_Galil_xy_Stages(mesoSPIM_Stage):
     def execute_program(self):
         '''Executes program stored on the Galil controller'''
         self.xy_stage.execute_program()
+        
+
+class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
+
+    '''
+
+    It is expected that the parent class has the following signals:
+        sig_move_relative = pyqtSignal(dict)
+        sig_move_relative_and_wait_until_done = pyqtSignal(dict)
+        sig_move_absolute = pyqtSignal(dict)
+        sig_move_absolute_and_wait_until_done = pyqtSignal(dict)
+        sig_zero = pyqtSignal(list)
+        sig_unzero = pyqtSignal(list)
+        sig_stop_movement = pyqtSignal()
+        sig_mark_rotation_position = pyqtSignal()
+
+    Also contains a QTimer that regularily sends position updates, e.g
+    during the execution of movements.
+
+    Todo: Rotation handling not implemented!
+    Todo: Rotation axes are hardcoded! (M-605: #5, M-061.PD: #6)
+    '''
+
+    def __init__(self, parent = None):
+	"""
+	Initialize stage object.
+	Output is some sort of handle to various connected stages
+	On PI, this is numbered 1->5, with 
+		1 : specimen X (left-right relative to camera)
+		2 : specimen Y (up-down relative to camera)
+		3 : specimen Z (in-out relative to camera)
+		4 : specimen Theta (rotation)
+		5 : zoom Z (optical axis; in-out relative to camera)
+	
+	This integer is key w/ value distance to move in relative, position to move in abs later
+	On ms2000.py, axis gets encoded into string letter.  
+	This can be found with 'WHO' command to MS2000 or TIGER controller, which will return all connected stages w/ letters
+	Such a thing probably can get encoded in .cfg file, or maybe write a parser one day for it.
+	Here assume X, Y, Z, T are specimen X, Y, Z, theta moves.
+	F, G are X, Y moves of zoom body.
+	
+	Galil has port hard-coded into galilcontrol.py.
+	PI can use ConnectUSB method with serial number as input.  Serial number in .cfg file.
+	
+	
+	Config file contains:
+	stage_parameters = {'stage_type' : 'DemoStage', # 'DemoStage' or 'PI' or other configs found in mesoSPIM_serial.py
+                    'startfocus' : -10000,
+                    'y_load_position': -86000,
+                    'y_unload_position': -120000,
+                    'x_max' : 51000,
+                    'x_min' : -46000,
+                    'y_max' : 160000,
+                    'y_min' : -160000,
+                    'z_max' : 99000,
+                    'z_min' : -99000,
+                    'f_max' : 99000,
+                    'f_min' : -99000,
+                    'theta_max' : 999,
+                    'theta_min' : -999,
+                    'x_rot_position': 0,
+                    'y_rot_position': -121000,
+                    'z_rot_position': 66000,
+                    }
+					
+	pi_parameters = {'controllername' : 'C-884',
+                 'stages' : ('L-509.20DG10','L-509.40DG10','L-509.20DG10','M-060.DG','M-406.4PD','NOSTAGE'),
+                 'refmode' : ('FRF',),
+                 'serialnum' : ('118015799'),
+				 
+	Adding : 
+	asi_parameters = ['port' : 'COMX']
+	
+	
+	Inputs : port number ('COM3')
+	"""
+        super().__init__(parent)
+		
+        import ms2000
+		
+        try:
+			# Connect to stage
+			asiStage = ms2000.MS2000(self.cfg.asi_parameters['port'])
+			logger.info('Connected to ASI stage controller on port ' + self.cfg.asi_parameters['port'])
+        except:
+			logger.info('Error while connecting to ASI stage controller on port ' + + self.cfg.asi_parameters['port'])
+		
+	
+
+    def __del__(self):
+        try:
+            """Close connection
+			# For ASI stage, is this necessary?
+			# Is it sufficient to terminate object?
+			
+			PI has unload() method
+			Galil uses parent close_stage() method
+			Close serial port at least?
+			"""
+            asiStage.shutDown()
+            logger.info('ASI stage controller disconnected')
+        except:
+			logger.info('Error while disconnecting ASI stage controller')
+			
+
+
+    def report_position(self):
+        """
+		Return position of stage axis for each axis, in turn
+		Record that to internal position parameters
+		Create position dictionary
+		Do same with internal position 
+				
+		"""
+        self.x_pos = asiStage.getPosition(axis = 'X')
+        self.y_pos = asiStage.getPosition(axis = 'Y')
+        self.z_pos = asiStage.getPosition(axis = 'Z')
+        self.f_pos = asiStage.getPosition(axis = 'F')
+        self.theta_pos = asiStage.getPosition(axis = 'T')
+		
+        self.create_position_dict()
+        
+        self.int_x_pos = self.x_pos + self.int_x_pos_offset
+        self.int_y_pos = self.y_pos + self.int_y_pos_offset
+        self.int_z_pos = self.z_pos + self.int_z_pos_offset
+        self.int_f_pos = self.f_pos + self.int_f_pos_offset
+        self.int_theta_pos = self.theta_pos + self.int_theta_pos_offset
+
+        self.create_internal_position_dict()
+
+        self.sig_position.emit(self.int_position_dict)
+
+
+    def move_relative(self, dict, wait_until_done=False):
+        ''' 
+		Move relative
+		Input dict includes axis as key, then distance as value
+		Mimic Galil implementation
+        '''
+        if 'x_rel' in dict:
+            x_rel = dict['x_rel']
+            if self.x_min < self.x_pos + x_rel and self.x_max > self.x_pos + x_rel:
+                self.asiStage.goRelative('X' = int(x_rel), wait_until_done)
+            else:
+                self.sig_status_message.emit('Relative movement stopped: X Motion limit would be reached!',1000)
+
+        if 'y_rel' in dict:
+            y_rel = dict['y_rel']
+            if self.y_min < self.y_pos + y_rel and self.y_max > self.y_pos + y_rel:
+                self.asiStage.goRelative('Y' = int(y_rel), wait_until_done)
+            else:
+                self.sig_status_message.emit('Relative movement stopped: Y Motion limit would be reached!',1000)
+
+        if 'z_rel' in dict:
+            z_rel = dict['z_rel']
+            if self.z_min < self.z_pos + z_rel and self.z_max > self.z_pos + z_rel:
+                self.asiStage.goRelative('Z' = int(z_rel), wait_until_done)
+            else:
+                self.sig_status_message.emit('Relative movement stopped: z Motion limit would be reached!',1000)
+
+        if 'theta_rel' in dict:
+            theta_rel = dict['theta_rel']
+            if self.theta_min < self.theta_pos + theta_rel and self.theta_max > self.theta_pos + theta_rel:
+               self.asiStage.goRelative('T' = int(theta_rel), wait_until_done)
+            else:
+               self.sig_status_message.emit('Relative movement stopped: theta Motion limit would be reached!',1000)
+
+        if 'f_rel' in dict:
+            f_rel = dict['f_rel']
+            if self.f_min < self.f_pos + f_rel and self.f_max > self.f_pos + f_rel:
+                self.asiStage.goRelative('F' = int(f_rel), wait_until_done)
+            else:
+                self.sig_status_message.emit('Relative movement stopped: f Motion limit would be reached!',1000)
+
+        if wait_until_done == True:
+			self.block_till_controller_is_ready()
+		
+		
+
+    def move_absolute(self, dict, wait_until_done=False):
+        '''
+        Move to provided position.  
+		Key in dict argument gives axis, key gives position to move to.
+		Move with asiStage.goAbsolute(self, axis, pos, bwait)
+        '''
+
+        if 'x_abs' in dict:
+			x_abs = dict['x_abs']
+			x_abs = x_abs - self.int_x_pos_offset
+			asiStage.goAbsolute('X', x_abs, wait_until_done)
+		
+        if 'y_abs' in dict:
+			y_abs = dict['y_abs']
+			y_abs = y_abs - self.int_y_pos_offset
+			asiStage.goAbsolute('Y', y_abs, wait_until_done)
+			
+        if 'z_abs' in dict:
+			z_abs = dict['z_abs']
+			z_abs = z_abs - self.int_z_pos_offset
+			asiStage.goAbsolute('Z', z_abs, wait_until_done)
+			
+        if 'theta_abs' in dict:
+            theta_abs = dict['theta_abs']
+            theta_abs = theta_abs - self.int_theta_pos_offset
+            asiStage.goAbsolute('T', theta_abs, wait_until_done)
+			
+        if 'f_abs' in dict:
+			f_abs = dict['f_abs']
+			f_abs = f_abs - self.int_f_pos_offset
+			asiStage.goAbsolute('F', f_abs, wait_until_done)
+
+        if wait_until_done == True:
+			self.block_till_controller_is_ready()
+			
+    def stop(self):
+	""" 
+	Stop all stage motion
+	"""
+        logging.info('Halting stage motion!')
+        asiStage.halt()
+		
+
+    def load_sample(self, wait_until_done=False):
+	"""
+	Go to load_sample position defined by config file
+	Reference version moves only the y axis.
+	"""
+	
+        loadDict = self.create_internal_position_dict()
+        loadDict['y_abs'] = self.cfg.stage_parameters['y_load_position']
+
+        self.move_absolute(loadDict, 'wait_until_done' = wait_until_done)
+
+    def unload_sample(self, wait_until_done=False):
+	"""
+	Go to unload_sample position defined by config file
+	Reference version moves only the y axis.
+	"""
+	
+        unloadDict = self.create_internal_position_dict()
+        unloadDict['y_abs'] = self.cfg.stage_parameters['y_unload_position']
+
+        self.move_absolute(unloadDict, 'wait_until_done' = wait_until_done)
+        
+    def go_to_rotation_position(self, wait_until_done=False):
+	"""
+	Go to rot_position position defined by config file
+	Reference version moves only the xyz axes
+	"""
+        rotDict = self.create_internal_position_dict()
+        rotDict['x_abs'] = self.x_rot_position
+        rotDict['y_abs'] = self.y_rot_position
+        rotDict['z_abs'] = self.z_rot_position
+		
+        self.move_absolute(rotDict, 'wait_until_done' = wait_until_done)
+
+    def block_till_controller_is_ready(self):
+        '''
+        Blocks further execution (especially during referencing moves)
+        till the controller says moves are OK
+		'''
+        resp = 'B'
+        while resp == 'B':
+            resp = asiStage.getMotorStatus()
+		
+    def goHome(self):
+	''' 
+	Go to home position as defined by controller
+	'''
+        asiStage.zero()
