@@ -67,6 +67,9 @@ laserdict = {'405 nm': 'M B000001',
              '594 nm': 'M B001000',
              '647 nm': 'M B010000'}
 
+# COM port for NicoLase			 
+laserEnablerPort = 'COM5'
+
 '''
 Assignment of the analog outputs of the Laser card to the channels
 The Empty slots are placeholders.
