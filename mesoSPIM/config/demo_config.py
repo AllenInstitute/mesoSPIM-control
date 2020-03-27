@@ -12,7 +12,7 @@ with real hardware one-by-one. Make sure to rename your new configuration file t
 Waveform output for Galvos, ETLs etc.
 '''
 
-waveformgeneration = 'DemoWaveFormGeneration' # 'DemoWaveFormGeneration' or 'NI'
+waveformgeneration = 'DemoWaveFormGeneration' # 'DemoWaveFormGeneration' or 'NI' or 'NI+octoDAC'
 
 '''
 Card designations need to be the same as in NI MAX, if necessary, use NI MAX
@@ -43,39 +43,25 @@ sidepanel = 'Demo' #'Demo' or 'FarmSimulator'
 Digital laser enable lines
 '''
 
-laser = 'Demo' # 'Demo' or 'NI'
+laser = 'Demo' # 'Demo' or 'NI' or 'NicoLase'
 
-''' The laserdict keys are the laser designation that will be shown
-in the user interface '''
+if laser == 'NicoLase':
+    # Assume if this is NicoLase, octoDAC also included for intensity waveforms.
 
-'''
-# Laser dict for NI-controlled lasers
-laserdict = {'405 nm': 'PXI6733/port0/line2',
-             '488 nm': 'PXI6733/port0/line3',
-             '515 nm': 'PXI6733/port0/line4',
-             '561 nm': 'PXI6733/port0/line5',
-             '594 nm': 'PXI6733/port0/line6',
-             '647 nm': 'PXI6733/port0/line7'}
-'''
+	# NicoLase laser dict
+	# Key is laser name
+	# Value is serial command to send to NicoLase to activate that laser
+	laserdict = {'405 nm': 'M B000001',
+				 '488 nm': 'M B000010',
+				 '552 nm': 'M B000100',
+				 '594 nm': 'M B001000',
+				 '647 nm': 'M B010000'}
 
-# NicoLase laser dict
-# Key is laser name
-# Value is serial command to send to NicoLase to activate that laser
-laserdict = {'405 nm': 'M B000001',
-             '488 nm': 'M B000010',
-             '552 nm': 'M B000100',
-             '594 nm': 'M B001000',
-             '647 nm': 'M B010000'}
-
-# COM port for NicoLase			 
-laserEnablerPort = 'COM5'
-
-'''
-Assignment of the analog outputs of the Laser card to the channels
-The Empty slots are placeholders.
-'''
-
-laser_designation = {'405 nm' : 0,
+	# COM port for NicoLase/octoDAC		 
+	laserEnablerPort = 'COM5'
+	
+	# octoDAC connections
+	laser_designation = {'405 nm' : 0,
                      '488 nm' : 1,
                      '515 nm' : 2,
                      '561 nm' : 3,
@@ -84,6 +70,36 @@ laser_designation = {'405 nm' : 0,
                      'Empty 0' : 6,
                      'Empty 1' : 7
                      }
+
+
+					 
+else:
+''' The laserdict keys are the laser designation that will be shown
+in the user interface '''
+
+	'''
+	# Laser dict for NI-controlled lasers
+	laserdict = {'405 nm': 'PXI6733/port0/line2',
+				 '488 nm': 'PXI6733/port0/line3',
+				 '515 nm': 'PXI6733/port0/line4',
+				 '561 nm': 'PXI6733/port0/line5',
+				 '594 nm': 'PXI6733/port0/line6',
+				 '647 nm': 'PXI6733/port0/line7'}
+	'''
+						 '''
+	Assignment of the analog outputs of the Laser card to the channels
+	The Empty slots are placeholders.
+	'''
+
+	laser_designation = {'405 nm' : 0,
+						 '488 nm' : 1,
+						 '515 nm' : 2,
+						 '561 nm' : 3,
+						 '594 nm' : 4,
+						 '647 nm' : 5,
+						 'Empty 0' : 6,
+						 'Empty 1' : 7
+						 }
 
 '''
 Assignment of the galvos and ETLs to the 6259 AO channels.

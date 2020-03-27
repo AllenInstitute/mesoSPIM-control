@@ -829,3 +829,271 @@ class mesoSPIM_DemoWaveFormGenerator(QtCore.QObject):
         Tasks should only be closed are they are stopped.
         '''
         pass
+    
+class mesoSPIM_WaveFormGeneratorNI_octoDAC(mesoSPIM_WaveFormGenerator):
+    """
+    Waveform generator class that uses octoDAC in place of NI PXI6733 to drive 
+    analog laser voltages. 
+
+    Overwriting methods which deal with laser_task and AO laser components.    
+    """
+    def __init__(self, parent):
+        """
+        Initialize class.  Is this the right place to connect to octoDAC over serial?
+        Or import connection from elsewhere?        
+        """
+        super().__init__()
+
+        self.cfg = parent.cfg
+        self.parent = parent
+
+        self.state = mesoSPIM_StateSingleton()
+        self.parent.sig_save_etl_config.connect(self.save_etl_parameters_to_csv)
+
+        cfg_file = self.cfg.startup['ETL_cfg_file']
+        self.state['ETL_cfg_file'] = cfg_file
+        self.update_etl_parameters_from_csv(cfg_file, self.state['laser'], self.state['zoom'])
+        
+        """
+        Connect to octoDAC here?  Should be existing COM port since it is overloaded with NicoLase
+        digital controller as well.        
+        """
+
+        logger.info('Thread ID at Startup: '+str(int(QtCore.QThread.currentThreadId())))
+
+        self.state['galvo_l_amplitude'] = self.cfg.startup['galvo_l_amplitude']
+        self.state['galvo_r_amplitude'] = self.cfg.startup['galvo_r_amplitude']
+        self.state['galvo_l_frequency'] = self.cfg.startup['galvo_l_frequency']
+        self.state['galvo_r_frequency'] = self.cfg.startup['galvo_r_frequency']
+        self.state['galvo_l_offset'] = self.cfg.startup['galvo_l_offset']
+        self.state['galvo_r_offset'] = self.cfg.startup['galvo_r_offset']
+    
+    
+    
+    
+    def create_laser_waveforms(self):
+        """
+        From input parameters, generate waveform array to send to octoDAC
+        Wave is single pulse of top-hat square wave.
+        
+        Parameters from get_parameter_list:
+            samplerate - timepoints for dense array; unused here
+            sweeptime - period of waveform (seconds)
+            laser_l_delay_% - delay from t = 0 to rising edge, in %
+            laser_l_pulse_% - time from rising edge 
+            max_laser_voltage - max voltage for lasers - 0-5v supported with octoDAC. 
+            intensity - intensity for amplitude of top hat, in % of max voltage
+            
+        Output is self.laser_waveforms
+            Format is numpy array as defined by octoDAC:
+                    M x 3 array, with each line a 'waypoint' in intensity trajectory
+                    in format [channel, time (long; microseconds), intensity (short, 0-65535)]
+                    
+                    Helps if this is already sorted and for current channel only.
+        
+        """
+        samplerate, sweeptime = self.state.get_parameter_list(['samplerate','sweeptime'])
+
+        laser_l_delay, laser_l_pulse, max_laser_voltage, intensity = \
+        self.state.get_parameter_list(['laser_l_delay_%','laser_l_pulse_%',
+        'max_laser_voltage','intensity'])
+    
+        # Laser peak intensity, in 16 bit integer
+        laserAmplitude = int(65535*max_laser_voltage * intensity / 100)
+
+        # Which channel is in use
+        current_laser_index = self.cfg.laser_designation[self.state['laser']]
+        
+        '''
+        # Waveform has waypoints:
+            time                                       value
+            0                                          0
+            sweeptime*delay                            laserAmplitude
+            sweeptime*delay + sweeptime*pulse          laserAmplitude
+            sweeptime*delay + sweeptime*pulse          0
+            sweeptime                                  0
+            
+        # Points fed to octoDAC need to only be changes in intensity.
+        '''
+    
+        laserWaveform = np.array([[current_laser_index, 0, 0], 
+                                  [current_laser_index, int(sweeptime*laser_l_delay*1e6), laserAmplitude], 
+                                  [current_laser_index, int(sweeptime*laser_l_delay*1e6 + sweeptime*laser_l_pulse*1e6), 0]])
+
+        self.laser_waveforms = laserWaveform
+        
+    def create_tasks(self):
+        '''Creates a total of four tasks for the mesoSPIM:
+
+        These are:
+        - the master trigger task, a digital out task that only provides a trigger pulse for the others
+        - the camera trigger task, a counter task that triggers the camera in lightsheet mode
+        - the galvo task (analog out) that controls the left & right galvos for creation of
+          the light-sheet and shadow avoidance
+        - the ETL & Laser task (analog out) that controls all the laser intensities (Laser should only
+          be on when the camera is acquiring) and the left/right ETL waveforms
+        '''
+        ah = self.cfg.acquisition_hardware
+
+        self.calculate_samples()
+        samplerate, sweeptime = self.state.get_parameter_list(['samplerate','sweeptime'])
+        samples = self.samples
+        camera_pulse_percent, camera_delay_percent = self.state.get_parameter_list(['camera_pulse_%','camera_delay_%'])
+
+        self.master_trigger_task = nidaqmx.Task()
+        self.camera_trigger_task = nidaqmx.Task()
+        self.galvo_etl_task = nidaqmx.Task()
+        
+        # Laser task to octoDAC
+        # Need to feed in laserEnabler, which is serial connection to laserEnabler (NicoLase + octoDAC) 
+        # device through USB/COM port
+        # Assume this gets made somewhere else (in startup?) then
+        # connection retained 
+        self.laser_task = octoDACTask(self.laserEnabler)
+
+        '''Housekeeping: Setting up the DO master trigger task'''
+        self.master_trigger_task.do_channels.add_do_chan(ah['master_trigger_out_line'],
+                                                         line_grouping=LineGrouping.CHAN_FOR_ALL_LINES)
+
+        '''Calculate camera high time and initial delay:
+
+        Disadvantage: high time and delay can only be set after a task has been created
+        '''
+
+        self.camera_high_time = camera_pulse_percent*0.01*sweeptime
+        self.camera_delay = camera_delay_percent*0.01*sweeptime
+
+        '''Housekeeping: Setting up the counter task for the camera trigger'''
+        self.camera_trigger_task.co_channels.add_co_pulse_chan_time(ah['camera_trigger_out_line'],
+                                                                    high_time=self.camera_high_time,
+                                                                    initial_delay=self.camera_delay)
+
+        self.camera_trigger_task.triggers.start_trigger.cfg_dig_edge_start_trig(ah['camera_trigger_source'])
+
+        '''Housekeeping: Setting up the AO task for the Galvo and setting the trigger input'''
+        self.galvo_etl_task.ao_channels.add_ao_voltage_chan(ah['galvo_etl_task_line'])
+        self.galvo_etl_task.timing.cfg_samp_clk_timing(rate=samplerate,
+                                                   sample_mode=AcquisitionType.FINITE,
+                                                   samps_per_chan=samples)
+        self.galvo_etl_task.triggers.start_trigger.cfg_dig_edge_start_trig(ah['galvo_etl_task_trigger_source'])
+
+        '''Housekeeping: Setting up the AO task for the ETL and lasers and setting the trigger input'''
+        """
+        Not needed with octoDAC
+        
+        self.laser_task.ao_channels.add_ao_voltage_chan(ah['laser_task_line'])
+        self.laser_task.timing.cfg_samp_clk_timing(rate=samplerate,
+                                                    sample_mode=AcquisitionType.FINITE,
+                                                    samps_per_chan=samples)
+        self.laser_task.triggers.start_trigger.cfg_dig_edge_start_trig(ah['laser_task_trigger_source'])
+        """
+
+        
+        
+    """
+    These invoke methods from laser_task object. 
+    Might not need to be re-written, but do need to include operations below.    
+    
+    """
+    
+    def write_waveforms_to_tasks(self):
+        '''Write the waveforms to the slave tasks'''
+        self.galvo_etl_task.write(self.galvo_and_etl_waveforms)
+        self.laser_task.write(self.laser_waveforms)
+        
+    def start_tasks(self):
+        '''Starts the tasks for camera triggering and analog outputs
+
+        If the tasks are configured to be triggered, they won't output any
+        signals until run_tasks() is called.
+        '''
+        self.camera_trigger_task.start()
+        self.galvo_etl_task.start()
+        self.laser_task.start()
+
+    def run_tasks(self):
+        '''Runs the tasks for triggering, analog and counter outputs
+
+        Firstly, the master trigger triggers all other task via a shared trigge
+        line (PFI line as given in the config file).
+
+        For this to work, all analog output and counter tasks have to be started so
+        that they are waiting for the trigger signal.
+        '''
+        self.master_trigger_task.write([False, True, True, True, False], auto_start=True)
+
+        '''Wait until everything is done - this is effectively a sleep function.'''
+        self.galvo_etl_task.wait_until_done()
+        self.laser_task.wait_until_done()
+        self.camera_trigger_task.wait_until_done()
+
+    def stop_tasks(self):
+        '''Stops the tasks for triggering, analog and counter outputs'''
+        self.galvo_etl_task.stop()
+        self.laser_task.stop()
+        self.camera_trigger_task.stop()
+        self.master_trigger_task.stop()
+
+    def close_tasks(self):
+        '''Closes the tasks for triggering, analog and counter outputs.
+
+        Tasks should only be closed are they are stopped.
+        '''
+        self.galvo_etl_task.close()
+        self.laser_task.close()
+        self.camera_trigger_task.close()
+        self.master_trigger_task.close()
+        
+class octoDACTask:
+    '''
+    Local helper class for controlling octoDAC.
+    Likely better in .devices.lasers as separate class or with NicoLase
+    '''
+
+    def __init__(self, serialObject):
+        # Assume octoDAC connection is made somewhere else on startup
+        # Feed the serial.Serial object here
+        
+        from .devices.lasers.octoDAC_LaserWaveformGenerator import octoDAC_LaserWaveformGenerator
+        
+        self.octoDAC = octoDAC_LaserWaveformGenerator(serialObject)
+
+    def write(self, waveformArray):
+        """
+        Send waveformArray to octoDAC
+        """
+        self.octoDAC.uploadWaveform(waveformArray)
+                
+
+    def start(self):
+        """
+        Configure task to start.  If triggered, it will wait for trigger.
+        """
+        self.octoDAC.waveformOnTrigger()
+    
+
+    def wait_until_done(self):
+        """
+        Wait until waveform state is complete
+        """
+        waveDone = False
+        while not waveDone:
+            waveDone = self.octoDAC.queryWaveformInProcess == "1"
+    
+    
+    def stop(self):
+        """ 
+        Stop tasks.  Send all signals to 0 immediately.
+        """
+        self.octoDAC.clearRegister() 
+    
+    
+    def close(self):
+        """
+        Close tasks. Clear out waveforms. 
+        Should follow stop().      
+        """
+        self.octoDAC.clearWaveforms()
+        
+        
+
