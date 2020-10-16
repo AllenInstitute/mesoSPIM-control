@@ -21,11 +21,13 @@ class RS232(object):
                  encoding = 'utf-8',
                  end_of_line = "\r",
                  port = None,
-                 timeout = 1.0e-3,
-                 wait_time = 1.0e-2,
+                 timeout = 1.0e-1,
+                 wait_time = 1.0e-1,
                  **kwds):
         """
         port - The port for RS-232 communication, e.g. "COM4".
+                If supplied as string, make a new connection
+                If supplied as serial.Serial object, use that 
         timeout - The RS-232 time out value.
         baudrate - The RS-232 communication speed, e.g. 9800.
         end_of_line - What character(s) are used to indicate the end of a line.
@@ -37,13 +39,31 @@ class RS232(object):
         self.end_of_line = end_of_line
         self.live = True
         self.wait_time = wait_time
-        try:
-            self.tty = serial.Serial(port, baudrate, timeout = timeout)
-            self.tty.flush()
-            time.sleep(self.wait_time)
-        except serial.serialutil.SerialException as e:
-            print("RS232 Error:", type(e), str(e))
-            self.live = False
+        
+        if isinstance(port, str):
+            '''
+            Port given as string.
+            Make a new connection            
+            '''        
+            try:
+                self.tty = serial.Serial(port, baudrate, timeout = timeout)
+                self.tty.flush()
+                time.sleep(self.wait_time)
+            except serial.serialutil.SerialException as e:
+                print("RS232 Error:", type(e), str(e))
+                self.live = False
+                
+        elif isinstance(port, serial.Serial):
+            '''
+            Port given as existing connection
+            Use existing connection
+            '''
+            try:
+                self.tty = port
+                self.tty.flush()
+            except:
+                self.live = False
+                raise("RS232 error using existing serial port connection")
 
     def commWithResp(self, command):
         """

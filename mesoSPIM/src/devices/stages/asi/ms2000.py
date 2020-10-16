@@ -6,13 +6,12 @@ RS232 interface to a Applied Scientific Instrumentation MS2000 stage.
 
 Hazen 3/09
 Adam Glaser 07/19
+PRN 05/20
 
 """
 
-import sys
-import time
 import RS232 as RS232
-
+import serial
 
 ## MS2000
 #
@@ -36,12 +35,47 @@ class MS2000(RS232.RS232):
         self.y = 0.0
         self.z = 0.0
 
-        try:
-            # open port
-            super().__init__(**kwds)
-        except:
-            self.live = False
-            print("ASI Stage is not connected? Stage is not on?")
+        if isinstance(kwds['port'], str):
+            '''
+            Port supplied as string
+            Open new connection on that port
+            '''
+        
+            self.closeOnDestroy = True
+            try:
+                # open port
+                super().__init__(**kwds)
+            except:
+                self.live = False
+                print("ASI Stage is not connected? Stage is not on?")
+                
+        elif isinstance(kwds['port'], serial.Serial):
+            '''
+            Port supplied as existing serial port connection
+            Use this existing connection to communicate to stage
+            Do not close on class instance destruction
+            '''
+            self.closeOnDestroy = False
+            
+            try:
+                # Open port with supplied **kwds
+                super().__init__(**kwds)
+            except:
+                self.live = False
+                print('ASI stage did not initialize on supplied serial port')
+            
+        else:
+            raise("Supply port as string or serial.Serial instance")
+            
+    def __del__(self):
+        '''
+        Class destructor method
+        Close serial port if stage was opened by providing serial port string
+        
+        '''
+        if self.closeOnDestroy:
+            self.shutDown()
+
 
     ## getMotorStatus
     #
@@ -118,24 +152,41 @@ class MS2000(RS232.RS232):
     def getPosition(self, axis = ''):
         if self.live:
             try:
-				if len(axis) == 0:
-					[self.x, self.y, self.z] = self.commWithResp("W X Y Z").split(" ")[1:4]
-					self.x = float(self.x)*self.unit_to_um # convert to mm
-					self.y = float(self.y)*self.unit_to_um # convert to mm
-					self.z = float(self.z)*self.unit_to_um # convert to mm
+                if len(axis) == 0:
+                    [self.x, self.y, self.z] = self.commWithResp("W X Y Z").split(" ")[1:4]
+                    self.x = float(self.x)*self.unit_to_um # convert to mm
+                    self.y = float(self.y)*self.unit_to_um # convert to mm
+                    self.z = float(self.z)*self.unit_to_um # convert to mm
 					
-					return [self.x, self.y, self.z]
+                    return [self.x, self.y, self.z]
 					
-				else:
-					self.x = self.commWithResp(axis)
-					return [self.x]
+                else:
+                    self.x = self.commWithResp(axis)
+                    return [self.x]
 					
             except:
                 print("Stage Error")
-				return [-1, -1, -1]
+                return [-1, -1, -1]
             
         else:
             return [0.0, 0.0, 0.0]
+        
+        
+    # Add in axis query command
+    def getAxisPosition(self, axis):
+        if self.live:
+            try:
+                
+                whereNow = self.commWithResp("W " + axis)
+                print("Axis " + axis + " at " + str(whereNow))
+                return whereNow                
+            except:
+                print('Stage Error on axis position query')
+                return -1
+            
+            
+        else:
+            return -1
 
     ## setBacklash
     #
@@ -222,9 +273,9 @@ class MS2000(RS232.RS232):
             self.commWithResp("!")
 			
 	
-	def halt(self):
-		if self.live:
-			self.commWithResp('\')
+    def halt(self):
+        if self.live:
+            self.commWithResp('\\')
 
 #
 # The MIT License
