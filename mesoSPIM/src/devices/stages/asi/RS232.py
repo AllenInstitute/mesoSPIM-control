@@ -22,7 +22,7 @@ class RS232(object):
                  end_of_line = "\r",
                  port = None,
                  timeout = 1.0e-1,
-                 wait_time = 1.0e-1,
+                 wait_time = 1.0e-2,
                  **kwds):
         """
         port - The port for RS-232 communication, e.g. "COM4".
@@ -65,12 +65,16 @@ class RS232(object):
                 self.live = False
                 raise("RS232 error using existing serial port connection")
 
-    def commWithResp(self, command):
+    def commWithResp(self, command, waitTime = None):
         """
         Send a command and wait (a little) for a response.
         """
         self.sendCommand(command)
-        time.sleep(10 * self.wait_time)
+        if waitTime is None:
+            time.sleep(10 * self.wait_time)
+        else:
+            time.sleep(waitTime)
+            
         response = ""
         response_len = self.tty.inWaiting()
         while response_len:
@@ -107,10 +111,12 @@ class RS232(object):
         response = self.tty.readline()
         return response.decode(self.encoding).strip()
         
-    def sendCommand(self, command):
+    def sendCommand(self, command, waitTime = 0.01):
         self.tty.flush()
+        time.sleep(waitTime)
         self.write(command + self.end_of_line)
-
+        
+        
     def shutDown(self):
         """
         Closes the RS-232 port.

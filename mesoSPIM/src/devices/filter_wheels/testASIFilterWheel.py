@@ -4,7 +4,7 @@ Created on Thu Oct 15 16:50:27 2020
 
 @author: rustyn
 
-Move ASI filter wheel around
+Move ASI filter wheel around. 
 
 """
 

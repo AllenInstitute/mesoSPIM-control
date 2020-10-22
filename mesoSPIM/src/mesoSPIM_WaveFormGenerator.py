@@ -1,5 +1,7 @@
 '''
 mesoSPIM Waveform Generator - Creates and allows control of waveform generation.
+
+Updated Oct 2020 by PRN to support AIBS mesoSPIM
 '''
 import os
 import numpy as np
@@ -18,6 +20,9 @@ from nidaqmx.types import CtrTime
 '''mesoSPIM imports'''
 from .mesoSPIM_State import mesoSPIM_StateSingleton
 from .utils.waveforms import single_pulse, tunable_lens_ramp, sawtooth, square
+
+'''octoDAC imports'''
+from .devices.lasers import octoDAC_LaserWaveformGenerator as octoDAC
 
 from PyQt5 import QtCore
 
@@ -185,34 +190,56 @@ class mesoSPIM_WaveFormGenerator(QtCore.QObject):
                                          dutycycle = galvo_r_duty_cycle,
                                          phase = galvo_r_phase)
 
-    def create_laser_waveforms(self):
+    def create_laser_waveforms(self, laserWaveformFormat = 'NI'):
         samplerate, sweeptime = self.state.get_parameter_list(['samplerate','sweeptime'])
 
         laser_l_delay, laser_l_pulse, max_laser_voltage, intensity = \
         self.state.get_parameter_list(['laser_l_delay_%','laser_l_pulse_%',
         'max_laser_voltage','intensity'])
 
-        '''Create zero waveforms for the lasers'''
-        self.zero_waveform = np.zeros((self.samples))
-
-        '''Update the laser intensity waveform'''
-        '''This could be improved: create a list with as many zero arrays as analog out lines for ETL and Lasers'''
-        self.laser_waveform_list = [self.zero_waveform for i in self.cfg.laser_designation]
-
-        ''' Conversion from % to V of the intensity:'''
-        laser_voltage = max_laser_voltage * intensity / 100
-
-        self.laser_template_waveform = single_pulse(samplerate = samplerate,
-                                                    sweeptime = sweeptime,
-                                                    delay = laser_l_delay,
-                                                    pulsewidth = laser_l_pulse,
-                                                    amplitude = laser_voltage,
-                                                    offset = 0)
-
-        '''The key: replace the waveform in the waveform list with this new template'''
-        current_laser_index = self.cfg.laser_designation[self.state['laser']]
-        self.laser_waveform_list[current_laser_index] = self.laser_template_waveform
-        self.laser_waveforms = np.stack(self.laser_waveform_list)
+        if laserWaveformFormat == 'NI':
+            '''Create zero waveforms for the lasers'''
+            self.zero_waveform = np.zeros((self.samples))
+    
+            '''Update the laser intensity waveform'''
+            '''This could be improved: create a list with as many zero arrays as analog out lines for ETL and Lasers'''
+            self.laser_waveform_list = [self.zero_waveform for i in self.cfg.laser_designation]
+    
+            ''' Conversion from % to V of the intensity:'''
+            laser_voltage = max_laser_voltage * intensity / 100
+    
+            self.laser_template_waveform = single_pulse(samplerate = samplerate,
+                                                        sweeptime = sweeptime,
+                                                        delay = laser_l_delay,
+                                                        pulsewidth = laser_l_pulse,
+                                                        amplitude = laser_voltage,
+                                                        offset = 0)
+    
+            '''The key: replace the waveform in the waveform list with this new template'''
+            current_laser_index = self.cfg.laser_designation[self.state['laser']]
+            self.laser_waveform_list[current_laser_index] = self.laser_template_waveform
+            self.laser_waveforms = np.stack(self.laser_waveform_list)
+            
+        elif laserWaveformFormat == 'octoDAC':
+            '''Generate numpy array in "waypoint" format for octoDAC'''
+            laser_voltage = int(65535 * max_laser_voltage * intensity / 100)
+            laser_array = np.array()
+            
+            # These are top-hat profiles for each channel involved
+            # Waveform format needs to be N x 3 array, with columns:
+            # [channel, timepoint (in microseconds), amplitude (0-65535)]
+            # Each channel will show up twice, one for each transition
+            for c in self.cfg.acquisition_hardware['laser_task_line']:
+                # Channel encoded as last character in "octoDAC:X"
+                channelHere = int(c[-1])
+                laser_array = np.vstack([laser_array, [channelHere, 1e6*laser_l_delay, laser_voltage]])
+                laser_array = np.vstack([laser_array, [channelHere, 1e6*(laser_l_delay + laser_l_pulse), 0]])
+                
+            self.laser_waveforms = laser_array
+        
+        else:
+            raise("Incorrect laserWaveformFormat in create_laser_waveforms()")
+        
 
     def bundle_galvo_and_etl_waveforms(self):
         ''' Stacks the Galvo and ETL waveforms into a numpy array adequate for
@@ -375,11 +402,21 @@ class mesoSPIM_WaveFormGenerator(QtCore.QObject):
         self.master_trigger_task = nidaqmx.Task()
         self.camera_trigger_task = nidaqmx.Task()
         self.galvo_etl_task = nidaqmx.Task()
-        self.laser_task = nidaqmx.Task()
-
+        
+        if self.cfg.laser == 'NI':
+            self.laser_task = nidaqmx.Task()
+        elif self.cfg.laser == 'NicoLase':
+            self.laser_task = octoDAC.octoDAC_LaserWaveformGenerator()
+        else:
+            raise("Improper laser configuration")
+            
         '''Housekeeping: Setting up the DO master trigger task'''
         self.master_trigger_task.do_channels.add_do_chan(ah['master_trigger_out_line'],
                                                          line_grouping=LineGrouping.CHAN_FOR_ALL_LINES)
+        
+        # Required for AIBS mesoSPIM NI DAQ configuration (dual PXIe-6341s)
+        # See https://github.com/ni/nidaqmx-python/blob/master/nidaqmx_examples/ai_multi_task_pxie_ref_clk.py
+        self.master_trigger_task.timing.ref_clk_src = "PXIe_Clk100"
 
         '''Calculate camera high time and initial delay:
 
@@ -397,18 +434,37 @@ class mesoSPIM_WaveFormGenerator(QtCore.QObject):
         self.camera_trigger_task.triggers.start_trigger.cfg_dig_edge_start_trig(ah['camera_trigger_source'])
 
         '''Housekeeping: Setting up the AO task for the Galvo and setting the trigger input'''
-        self.galvo_etl_task.ao_channels.add_ao_voltage_chan(ah['galvo_etl_task_line'])
+        
+        # Add this check to support either AO channels as string (standard)
+        # or as list in configuration 
+        
+        if isinstance(ah['galvo_etl_task_line'], list):
+            galvoETLchannels = nidaqmx.utils.flatten_channel_string(ah['galvo_etl_task_line'])
+        elif isinstance(ah['galvo_etl_task_line'], str):
+            galvoETLchannels = ah['galvo_etl_task_line']
+        else:
+            raise('Incorrect type for galvo_etl_task_line key')
+            
+        self.galvo_etl_task.ao_channels.add_ao_voltage_chan(galvoETLchannels)
         self.galvo_etl_task.timing.cfg_samp_clk_timing(rate=samplerate,
                                                    sample_mode=AcquisitionType.FINITE,
                                                    samps_per_chan=samples)
         self.galvo_etl_task.triggers.start_trigger.cfg_dig_edge_start_trig(ah['galvo_etl_task_trigger_source'])
 
-        '''Housekeeping: Setting up the AO task for the ETL and lasers and setting the trigger input'''
-        self.laser_task.ao_channels.add_ao_voltage_chan(ah['laser_task_line'])
-        self.laser_task.timing.cfg_samp_clk_timing(rate=samplerate,
-                                                    sample_mode=AcquisitionType.FINITE,
-                                                    samps_per_chan=samples)
-        self.laser_task.triggers.start_trigger.cfg_dig_edge_start_trig(ah['laser_task_trigger_source'])
+        
+        if self.laser_task == 'NI':
+            '''Housekeeping: Setting up the AO task for the ETL and lasers and setting the trigger input'''
+            self.laser_task.ao_channels.add_ao_voltage_chan(ah['laser_task_line'])
+            self.laser_task.timing.cfg_samp_clk_timing(rate=samplerate,
+                                                        sample_mode=AcquisitionType.FINITE,
+                                                        samps_per_chan=samples)
+            self.laser_task.triggers.start_trigger.cfg_dig_edge_start_trig(ah['laser_task_trigger_source'])
+        
+        elif self.laser_task == 'NicoLase':
+            self.laser_task.waveformOnTrigger() # Configure to run waveforms once on trigger
+        
+        else:
+            raise("Incorrect laser_task value at WaveformGenerator channel update")
 
     def write_waveforms_to_tasks(self):
         '''Write the waveforms to the slave tasks'''
@@ -842,7 +898,7 @@ class mesoSPIM_WaveFormGeneratorNI_octoDAC(mesoSPIM_WaveFormGenerator):
         Initialize class.  Is this the right place to connect to octoDAC over serial?
         Or import connection from elsewhere?        
         """
-        super().__init__()
+        super().__init__(parent)
 
         self.cfg = parent.cfg
         self.parent = parent
@@ -855,9 +911,10 @@ class mesoSPIM_WaveFormGeneratorNI_octoDAC(mesoSPIM_WaveFormGenerator):
         self.update_etl_parameters_from_csv(cfg_file, self.state['laser'], self.state['zoom'])
         
         """
-        Connect to octoDAC here?  Should be existing COM port since it is overloaded with NicoLase
-        digital controller as well.        
+        Connect to octoDAC here as waveform generator         
         """
+        
+        self.laser_task = octoDAC.octoDAC_LaserWaveformGenerator(self.cfg.laserEnablerPort, verbose = True)
 
         logger.info('Thread ID at Startup: '+str(int(QtCore.QThread.currentThreadId())))
 
@@ -944,17 +1001,12 @@ class mesoSPIM_WaveFormGeneratorNI_octoDAC(mesoSPIM_WaveFormGenerator):
         self.camera_trigger_task = nidaqmx.Task()
         self.galvo_etl_task = nidaqmx.Task()
         
-        # Laser task to octoDAC
-        # Need to feed in laserEnabler, which is serial connection to laserEnabler (NicoLase + octoDAC) 
-        # device through USB/COM port
-        # Assume this gets made somewhere else (in startup?) then
-        # connection retained 
-        self.laser_task = octoDACTask(self.laserEnabler)
+        # Created octoDAC task in __init__
 
         '''Housekeeping: Setting up the DO master trigger task'''
         self.master_trigger_task.do_channels.add_do_chan(ah['master_trigger_out_line'],
                                                          line_grouping=LineGrouping.CHAN_FOR_ALL_LINES)
-
+        self.master_trigger_task.timing.ref_clk_src = "PXIe_Clk100" # Required with separate NI DAQ cards for galvo + ETLs
         '''Calculate camera high time and initial delay:
 
         Disadvantage: high time and delay can only be set after a task has been created
@@ -964,14 +1016,29 @@ class mesoSPIM_WaveFormGeneratorNI_octoDAC(mesoSPIM_WaveFormGenerator):
         self.camera_delay = camera_delay_percent*0.01*sweeptime
 
         '''Housekeeping: Setting up the counter task for the camera trigger'''
+        '''
+        Unused
+        
         self.camera_trigger_task.co_channels.add_co_pulse_chan_time(ah['camera_trigger_out_line'],
                                                                     high_time=self.camera_high_time,
                                                                     initial_delay=self.camera_delay)
 
         self.camera_trigger_task.triggers.start_trigger.cfg_dig_edge_start_trig(ah['camera_trigger_source'])
+        '''
 
         '''Housekeeping: Setting up the AO task for the Galvo and setting the trigger input'''
-        self.galvo_etl_task.ao_channels.add_ao_voltage_chan(ah['galvo_etl_task_line'])
+        if isinstance(ah['galvo_etl_task_line'], list):
+            # List format when specifying each channel individually
+            # Better when using separate DAQ cards
+            galvoETLchannels = nidaqmx.utils.flatten_channel_string(ah['galvo_etl_task_line'])
+        elif isinstance(ah['galvo_etl_task_line'], str):
+            # String format in original when all on 1 DAQ card
+            galvoETLchannels = ah['galvo_etl_task_line']
+        else:
+            raise('Incorrect type for galvo_etl_task_line key')
+        
+        
+        self.galvo_etl_task.ao_channels.add_ao_voltage_chan(galvoETLchannels)
         self.galvo_etl_task.timing.cfg_samp_clk_timing(rate=samplerate,
                                                    sample_mode=AcquisitionType.FINITE,
                                                    samps_per_chan=samples)
@@ -998,6 +1065,11 @@ class mesoSPIM_WaveFormGeneratorNI_octoDAC(mesoSPIM_WaveFormGenerator):
     
     def write_waveforms_to_tasks(self):
         '''Write the waveforms to the slave tasks'''
+        
+        # Somewhere in here actually make the galvo_and_etl_waveforms to send to the NI card.
+        
+        
+        
         self.galvo_etl_task.write(self.galvo_and_etl_waveforms)
         self.laser_task.write(self.laser_waveforms)
         
@@ -1044,56 +1116,101 @@ class mesoSPIM_WaveFormGeneratorNI_octoDAC(mesoSPIM_WaveFormGenerator):
         self.camera_trigger_task.close()
         self.master_trigger_task.close()
         
-class octoDACTask:
-    '''
-    Local helper class for controlling octoDAC.
-    Likely better in .devices.lasers as separate class or with NicoLase
-    '''
-
-    def __init__(self, serialObject):
-        # Assume octoDAC connection is made somewhere else on startup
-        # Feed the serial.Serial object here
+    def _check_if_laser_in_laserdict(self, laser):
+        '''Checks if the laser designation (string) given as argument exists in the laserdict'''
+        if laser in self.cfg.laser_designation:
+            return True
+        else:
+            raise ValueError('Laser not in the configuration')
         
-        from .devices.lasers.octoDAC_LaserWaveformGenerator import octoDAC_LaserWaveformGenerator
+    def enable(self, laser, waveformOnly = True):
         
-        self.octoDAC = octoDAC_LaserWaveformGenerator(serialObject)
+        '''
+        Enables a single laser line. If another laser was on beforehand, this one is switched off.
+        If optional waveformOnly argument is True, then octoDAC not used as laser enabler. 
+            Set only state and not channel.
+        
+        '''
+        
+        if self._check_if_laser_in_laserdict(laser) == True:
+            self.laser_task.clearRegister()
+            if not waveformOnly:
+                self.laser_task.setChannel(self.laserDict[laser], self.enableLevel)
+            self.laserEnableState = laser
+        else:
+            self.laserEnableState = 'off'
+            
+        
+    def enable_all(self, waveformOnly = True):
+        
+        if not waveformOnly:
+            for k in self.laserDict:
+                self.laser_task.setChannel(self.laserDict[k], self.enableLevel)
+            
+        self.laserEnableState = 'all on'
 
-    def write(self, waveformArray):
-        """
-        Send waveformArray to octoDAC
-        """
-        self.octoDAC.uploadWaveform(waveformArray)
+    def disable_all(self):
+        self.laser_task.clearRegister()
+        self.laserEnableState = 'off'
+    
+    def state(self):
+        return self.laserEnableState
+    
+# """
+# Moved this functinality to octoDAC_LaserWaveformGenerator.py
+# Can remove here after confirming works
+# class octoDACTask:
+#     '''
+#     Local helper class for controlling octoDAC.
+#     Likely better in .devices.lasers as separate class or with NicoLase
+#     '''
+
+#     def __init__(self, serialObject):
+#         # Assume octoDAC connection is made somewhere else on startup
+#         # Feed the serial.Serial object here
+        
+#         from .devices.lasers.octoDAC_LaserWaveformGenerator import octoDAC_LaserWaveformGenerator
+        
+#         self.octoDAC = octoDAC_LaserWaveformGenerator(serialObject)
+
+#     def write(self, waveformArray):
+#         """
+#         Send waveformArray to octoDAC
+#         """
+#         self.octoDAC.uploadWaveform(waveformArray)
                 
 
-    def start(self):
-        """
-        Configure task to start.  If triggered, it will wait for trigger.
-        """
-        self.octoDAC.waveformOnTrigger()
+#     def start(self):
+#         """
+#         Configure task to start.  If triggered, it will wait for trigger.
+#         """
+#         self.octoDAC.waveformOnTrigger()
     
 
-    def wait_until_done(self):
-        """
-        Wait until waveform state is complete
-        """
-        waveDone = False
-        while not waveDone:
-            waveDone = self.octoDAC.queryWaveformInProcess == "1"
+#     def wait_until_done(self):
+#         """
+#         Wait until waveform state is complete
+#         """
+#         waveDone = False
+#         while not waveDone:
+#             waveDone = self.octoDAC.queryWaveformInProcess == "1"
     
     
-    def stop(self):
-        """ 
-        Stop tasks.  Send all signals to 0 immediately.
-        """
-        self.octoDAC.clearRegister() 
+#     def stop(self):
+#         """ 
+#         Stop tasks.  Send all signals to 0 immediately.
+#         """
+#         self.octoDAC.clearRegister() 
     
     
-    def close(self):
-        """
-        Close tasks. Clear out waveforms. 
-        Should follow stop().      
-        """
-        self.octoDAC.clearWaveforms()
+#     def close(self):
+#         """
+#         Close tasks. Clear out waveforms. 
+#         Should follow stop().      
+#         """
+#         self.octoDAC.clearWaveforms()
+        
+# """
         
         
 

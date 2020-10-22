@@ -39,6 +39,8 @@ asiStage = ms2000.MS2000(port = comPort, baudrate = baudrate)
 for k in stagesInstalled:
     whereNow = asiStage.getAxisPosition(k)
     print(whereNow)
+    
+print(asiStage.getPosition())
 
 print("Closing stage on " + comPort)
 del(asiStage)
@@ -54,7 +56,12 @@ asiStage = ms2000.MS2000(port = asiSer)
 # Print current position of each axis expected
 for k in stagesInstalled:
     whereNow = asiStage.getAxisPosition(k)
-    print(whereNow)
+    print(k + ' = ' + str(whereNow))
+    
+asiStage.goRelative("T", 90, True)
+print('T = ' + str(asiStage.getAxisPosition('T')))
+
+#asiStage.reset()
     
 print("Closing stage on " + comPort)
 del(asiStage)

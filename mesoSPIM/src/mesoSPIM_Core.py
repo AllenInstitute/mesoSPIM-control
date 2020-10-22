@@ -31,10 +31,11 @@ from .mesoSPIM_Camera import mesoSPIM_Camera
 
 from .devices.lasers.Demo_LaserEnabler import Demo_LaserEnabler
 from .devices.lasers.mesoSPIM_LaserEnabler import mesoSPIM_LaserEnabler
+from .devices.lasers.octoDAC_LaserWaveformGenerator import octoDAC_LaserWaveformGenerator
 
 from .mesoSPIM_Serial import mesoSPIM_Serial
 # from .mesoSPIM_DemoSerial import mesoSPIM_Serial
-from .mesoSPIM_WaveFormGenerator import mesoSPIM_WaveFormGenerator, mesoSPIM_DemoWaveFormGenerator
+from .mesoSPIM_WaveFormGenerator import mesoSPIM_WaveFormGenerator, mesoSPIM_DemoWaveFormGenerator, mesoSPIM_WaveFormGeneratorNI_octoDAC
 
 from .utils.acquisitions import AcquisitionList, Acquisition
 from .utils.utility_functions import convert_seconds_to_string
@@ -167,6 +168,8 @@ class mesoSPIM_Core(QtCore.QObject):
             self.waveformer = mesoSPIM_WaveFormGenerator(self)
         elif self.cfg.waveformgeneration == 'DemoWaveFormGeneration':
             self.waveformer = mesoSPIM_DemoWaveFormGenerator(self)
+        elif self.cfg.waveformgeneration == 'NI+octoDAC':
+            self.waveformer = mesoSPIM_WaveFormGeneratorNI_octoDAC(self)
 
         self.waveformer.sig_update_gui_from_state.connect(self.sig_update_gui_from_state.emit)
         self.sig_state_request.connect(self.waveformer.state_request_handler)
@@ -194,8 +197,13 @@ class mesoSPIM_Core(QtCore.QObject):
             self.laserenabler = mesoSPIM_LaserEnabler(self.cfg.laserdict)
         elif self.cfg.laser == 'Demo':
             self.laserenabler = Demo_LaserEnabler(self.cfg.laserdict)
-        elif self.cfg.laser == 'NicoLase':
-            self.laserenabler = NicoLase_LaserEnabler(self.cfg.laserdict, self.cfg.laserEnablerPort)
+        elif self.cfg.laser == 'octoDAC':
+            self.laserenabler = Demo_LaserEnabler(self.cfg.laserdict)
+            # if isinstance(self.waveformer, mesoSPIM_WaveFormGeneratorNI_octoDAC):
+            #     # Already set up octoDAC as waveform generator. No need to reconnect here
+            #     self.laserenabler = self.waveformer
+            # else:
+            #     self.laserenabler = octoDAC_LaserWaveformGenerator(self.cfg.laserEnablerPort)
 
         self.state['state']='idle'
         self.state['current_framerate'] = self.cfg.startup['average_frame_rate']
@@ -464,6 +472,7 @@ class mesoSPIM_Core(QtCore.QObject):
     Sub-Imaging modes
     '''
     def snap(self):
+
         self.sig_prepare_live.emit()
         self.open_shutters()
         self.snap_image()
@@ -489,11 +498,20 @@ class mesoSPIM_Core(QtCore.QObject):
         '''
 
         self.waveformer.create_tasks()
+        print('tasks created')
+        
         self.waveformer.write_waveforms_to_tasks()
+        print('written waveforms')
+        
         self.waveformer.start_tasks()
+        print('tasks started')
+        
         self.waveformer.run_tasks()
+        print('tasks run')
         self.waveformer.stop_tasks()
+        print('tasks stopped')
         self.waveformer.close_tasks()
+        print('tasks closed')
 
     def prepare_image_series(self):
         '''Prepares an image series without waveform update'''
@@ -517,11 +535,13 @@ class mesoSPIM_Core(QtCore.QObject):
     def live(self):
         self.stopflag = False
         self.sig_prepare_live.emit()
-
+        print('state prepared')
         self.open_shutters()
+        print('shutters opened')
         while self.stopflag is False:
             ''' Needs update to use snap image in series '''
             self.snap_image()
+            print('image snapped')
             self.sig_get_live_image.emit()
 
             QtWidgets.QApplication.processEvents()
@@ -530,8 +550,10 @@ class mesoSPIM_Core(QtCore.QObject):
             self.open_shutters()
 
         self.close_shutters()
+        print('shutters closed')
         self.sig_end_live.emit()
         self.sig_finished.emit()
+        print('state closed')
 
     def start(self, row=None):
         self.stopflag = False

@@ -128,6 +128,10 @@ class ASIFilterWheel(object):
         else:
             print(f'Filter {filter} not found in configuration.')
             
+    def reset(self):
+        self.ser.write('~ \r'.encode())
+        time.sleep(1)
+            
     def __del__(self):
         '''
         Class destructor method

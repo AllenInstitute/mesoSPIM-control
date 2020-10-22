@@ -9,9 +9,13 @@ Adam Glaser 07/19
 PRN 05/20
 
 """
-
-import RS232 as RS232
+try:
+    import RS232 as RS232
+except:
+    from . import RS232 as RS232
+    
 import serial
+from sys import exc_info as ErrorInfo
 
 ## MS2000
 #
@@ -29,11 +33,16 @@ class MS2000(RS232.RS232):
     def __init__(self, **kwds):
 
         self.live = True
-        self.um_to_unit = 10000
-        self.unit_to_um = 1.0/self.um_to_unit
+        self.um_to_unit = 10.0
+        self.unit_to_um = 0.1
+        self.unit_to_deg = 0.001
+        self.deg_to_unit = 1000.
         self.x = 0.0
         self.y = 0.0
         self.z = 0.0
+        self.m = 0.0
+        self.n = 0.0
+        self.t = 0.0
 
         if isinstance(kwds['port'], str):
             '''
@@ -66,6 +75,7 @@ class MS2000(RS232.RS232):
             
         else:
             raise("Supply port as string or serial.Serial instance")
+
             
     def __del__(self):
         '''
@@ -76,6 +86,8 @@ class MS2000(RS232.RS232):
         if self.closeOnDestroy:
             self.shutDown()
 
+    def reset(self):
+        resp = self.commWithResp("~", waitTime = 1)
 
     ## getMotorStatus
     #
@@ -99,8 +111,12 @@ class MS2000(RS232.RS232):
     #
     def goAbsolute(self, axis, pos, bwait):
         if self.live:
-            p = pos * self.um_to_unit
-            p = round(p)
+            
+            if (axis == 'T'):
+                p = self.scaleASIinput(pos, isRotation = True)
+            else:
+                p = self.scaleASIinput(pos)
+            
             self.commWithResp("M " + axis + "=" + str(p))
             if bwait == True:
                 response = self.getMotorStatus()
@@ -114,8 +130,11 @@ class MS2000(RS232.RS232):
     #
     def goRelative(self, axis, pos, bwait):
         if self.live:
-            p = pos * self.um_to_unit
-            p = round(p)
+            if (axis == 'T'):
+                p = self.scaleASIinput(pos, isRotation = True)
+            else:
+                p = self.scaleASIinput(pos)
+
             self.commWithResp("R " + axis + "=" + str(p))
             if bwait == True:
                 response = self.getMotorStatus()
@@ -149,37 +168,122 @@ class MS2000(RS232.RS232):
     #
     # @return [stage x (um), stage y (um), stage z (um)]
     #
-    def getPosition(self, axis = ''):
+    def getPosition(self, axis = '', verbose = False):
         if self.live:
-            try:
-                if len(axis) == 0:
-                    [self.x, self.y, self.z] = self.commWithResp("W X Y Z").split(" ")[1:4]
-                    self.x = float(self.x)*self.unit_to_um # convert to mm
-                    self.y = float(self.y)*self.unit_to_um # convert to mm
-                    self.z = float(self.z)*self.unit_to_um # convert to mm
+           # try:
+            if len(axis) == 0:
+                
+                queryResp = self.commWithResp("W X Y Z T M N")
+                if verbose:
+                    print(queryResp)
+                    print(queryResp.split(" "))
+                    
+                [self.x, self.y, self.z, self.t, self.m, self.n] = self.commWithResp("W X Y Z T M N").split(" ")[1:7] # Watch order of return vs query here
+                
+                self.x = self.scaleASIoutput(self.x) # convert to um
+                self.y = self.scaleASIoutput(self.y) # convert to um
+                self.z = self.scaleASIoutput(self.z) # convert to um
+                self.m = self.scaleASIoutput(self.m) # convert to um
+                self.n = self.scaleASIoutput(self.n) # convert to um
+                
+                self.t = self.scaleASIoutput(self.t, isRotation = True) # convert to deg
+
+                return [self.x, self.y, self.z, self.n, self.t]
 					
-                    return [self.x, self.y, self.z]
+            else:
+                self.x = self.commWithResp(axis)
+                return [self.x]
 					
-                else:
-                    self.x = self.commWithResp(axis)
-                    return [self.x]
-					
-            except:
-                print("Stage Error")
-                return [-1, -1, -1]
+            #except:
+             #   print("Stage Error in ms2000.getPosition")
+              #  return [-1, -1, -1, -1, -1]
+               # raise
             
         else:
-            return [0.0, 0.0, 0.0]
+            return [0.0, 0.0, 0.0, 0.0, 0.0]
+    
+    # Return value from raw getAxisPosition as int of position value only
+    def stripIntPosition(self, postString):
+        '''
         
+        Parameters
+        ----------
+        postString : String
+            Raw string from getAxisPosition. Expected to be in format ":A val1 val2 ... \r\n", 
+            where val1, val2, ... are positions of axes from getAxisPosition query
+
+        Returns
+        -------
+        If postString contains >1 value, return list of ints
+        If postString contains = 1 value, return int
+
+        '''
+        
+        postVals = [int(x) for x in postString.split(' ')[1:-1]]
+        
+        if len(postVals) > 1:
+            return postVals
+        elif len(postVals) == 1:
+            return postVals[0]
+        else:
+            return -1
+        
+    def scaleASIoutput(self, val, verbose = False, isRotation = False):
+        '''
+        Parameters
+        ----------
+        val : numeric
+            Default stage position values from ASI are given as tenths of microns when
+            queried with 'W' command. 
+            Here make float and scale to microns
+
+        Returns
+        -------
+        outVal = val, scaled from tenths of microns to microns and made float
+                    if isRotation = True, this is scaled from degrees to counts
+        '''
+
+        if isRotation:
+            outVal = self.unit_to_deg*float(val)
+        else:
+            outVal = self.unit_to_um*float(val)
+        
+        if verbose:
+            print(val)
+            print(outVal)
+            
+        return outVal  
+    
+    def scaleASIinput(self, val, verbose = False, isRotation = False):
+        
+        if isRotation:
+            outVal = int(self.deg_to_unit*val)
+        else:
+            outVal = int(self.um_to_unit*val)
+        
+        if verbose:
+            print(val)
+            print(outVal)
+            
+        return outVal  
         
     # Add in axis query command
-    def getAxisPosition(self, axis):
+    def getAxisPosition(self, axis, debugMode = False, verbose = False):
+        # Debug mode for returning whole raw string.  
+        # If false, use stripIntPosition to return int or list of ints
+        
         if self.live:
             try:
                 
                 whereNow = self.commWithResp("W " + axis)
-                print("Axis " + axis + " at " + str(whereNow))
-                return whereNow                
+                
+                if verbose:
+                    print("Axis " + axis + " at " + whereNow)
+                    
+                if debugMode:
+                    return whereNow
+                else:
+                    return self.scaleASIoutput(self.stripIntPosition(whereNow))
             except:
                 print('Stage Error on axis position query')
                 return -1
@@ -270,9 +374,13 @@ class MS2000(RS232.RS232):
     #
     def zero(self):
         if self.live:
-            self.commWithResp("!")
+            self.commWithResp("Z")
 			
 	
+    def goHome(self):
+        if self.live:
+            self.commWithResp("!")
+    
     def halt(self):
         if self.live:
             self.commWithResp('\\')

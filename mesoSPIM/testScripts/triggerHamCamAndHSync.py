@@ -4,66 +4,137 @@ Created on Thu Oct 15 14:25:22 2020
 
 @author: rustyn
 
-Confirm triggering of HamCam, counting of Hsync pulses
+Confirm triggering of HamCam, leading to triggering of galvo waveform
+
+master_trigger_out_line fires
+  HamCam triggered
+  camera_trigger_source triggered
+    galvo_etl_task_line ramps
 
 
 """
 
 import nidaqmx
 import time
+import numpy as np
+from scipy import signal
 
 # In HCImage, set to External (Light Sheet) triggering
 # Output trigger enabled, with Trigger 1 set to Positive; Programmable; HSYNC
 # Click 'Live' in Capture tab of HCImage before running this script
+# , 'pxiDev1/ao0', 'pxiDev1/ao1'
 
-acquisition_hardware = {'master_trigger_out_line' : 'pxiDev2/port0/line0',
-                        'camera_trigger_source' : 'pxiDev2/PFI0',
-                        'camera_trigger_out_line' : 'pxiDev2/ctr0'}
-fs = 100e6
-nb_channels = 128
+acquisition_hardware = {'master_trigger_out_line' : '/pxiDev2/port0/line0',
+                        'camera_trigger_source' : '/pxiDev2/PFI0',
+                        'galvo_etl_task_line' : ['pxiDev2/ao0', 'pxiDev2/ao1', 'pxiDev1/ao0', 'pxiDev1/ao1'],
+                        'galvo_etl_task_trigger_source' : '/pxiDev2/PFI0'}
 
-# Set up trigger
+galvoParameters = {'samplerate' : 100000,
+                   'sweeptime' : 1.0,
+                   'frequency' : 19.9,
+                   'amplitude' : 2.5,
+                   'offset' : 0,
+                   'dutycycle' : 50,
+                   'phase' : np.pi/2}
+
+def sawtooth(
+    samplerate = 100000,    # in samples/second
+    sweeptime = 0.4,        # in seconds
+    frequency = 10,         # in Hz
+    amplitude = 0,          # in V
+    offset = 0,             # in V
+    dutycycle = 50,          # dutycycle in percent
+    phase = np.pi/2,          # in rad
+    ):
+    '''
+    Returns a numpy array with a sawtooth function
+
+    Used for creating the galvo signal.
+
+    Example:
+    galvosignal =  sawtooth(100000, 0.4, 199, 3.67, 0, 50, np.pi)
+    '''
+
+    samples =  int(samplerate*sweeptime)
+    dutycycle = dutycycle/100       # the signal.sawtooth width parameter has to be between 0 and 1
+    t = np.linspace(0, sweeptime, samples)
+    # Using the signal toolbox from scipy for the sawtooth:
+    waveform = signal.sawtooth(2 * np.pi * frequency * t + phase, width=dutycycle)
+    # Scale the waveform to a certain amplitude and apply an offset:
+    waveform = amplitude * waveform + offset
+
+    return waveform
+
+
+# Set up output trigger
 camTrigger = nidaqmx.Task()
 camTrigger.do_channels.add_do_chan(acquisition_hardware['master_trigger_out_line'])
+camTrigger.timing.ref_clk_src = "PXIe_Clk100" # Must explicitly state this to match what is used in analog 
+                                              # Required with pxiDev2 used for both triggering and analog
+                                              # See https://github.com/ni/nidaqmx-python/blob/master/nidaqmx_examples/ai_multi_task_pxie_ref_clk.py
+
+# Set up waveforms
+'''Create Galvo waveforms:'''
+galvoWaveform = sawtooth(galvoParameters['samplerate'],
+                                 galvoParameters['sweeptime'],
+                                 galvoParameters['frequency'],
+                                 galvoParameters['amplitude'],
+                                 galvoParameters['offset'],
+                                 galvoParameters['dutycycle'],
+                                 galvoParameters['phase'])
+
+'''Create ETL waveforms:'''
+etlWaveform = sawtooth(galvoParameters['samplerate'],
+                                 galvoParameters['sweeptime'],
+                                 galvoParameters['frequency']/10,
+                                 galvoParameters['amplitude'],
+                                 2.5,
+                                 galvoParameters['dutycycle'],
+                                 galvoParameters['phase'])
 
 
+waveform = np.stack((galvoWaveform, galvoWaveform, etlWaveform, etlWaveform))
 
 
+# Set up galvo task + analog output trigger
+galvoETLTask = nidaqmx.Task()
 
-# Set up counter
-hSyncCounter = nidaqmx.Task()
-hSyncCounter.ci_channels.add_ci_count_edges_chan(acquisition_hardware['camera_trigger_out_line'], 'ctr0')
-hSyncCounter.channels.ci_count_edges_count_reset_term = acquisition_hardware['camera_trigger_source']
+if isinstance(acquisition_hardware['galvo_etl_task_line'], list):
+    galvoETLchannels = nidaqmx.utils.flatten_channel_string(acquisition_hardware['galvo_etl_task_line'])
+elif isinstance(acquisition_hardware['galvo_etl_task_line'], str):
+    galvoETLchannels = acquisition_hardware['galvo_etl_task_line']
+else:
+    raise('Incorrect type for galvo_etl_task_line key')
+    
+    
+galvoETLTask.ao_channels.add_ao_voltage_chan(galvoETLchannels)
 
-# CTR 0 src=> PFI 2
-hSyncCounter.timing.cfg_samp_clk_timing(rate=fs, source="ctr0", sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS, samps_per_chan=nb_channels+1)
+galvoETLTask.timing.cfg_samp_clk_timing(rate = galvoParameters['samplerate'],
+                                            sample_mode = nidaqmx.constants.AcquisitionType.FINITE,
+                                            samps_per_chan = int(galvoParameters['samplerate']*galvoParameters['sweeptime']))
 
-hSyncCounter.channels.ci_count_edges_count_reset_active_edge = nidaqmx.constants.Edge.RISING
-# Specify whether to reset the count on the active edge specified with ci_count_edges_count_reset_term.
-hSyncCounter.channels.ci_count_edges_count_reset_enable = True
-hSyncCounter.start()
-
-  self.camera_trigger_task.co_channels.add_co_pulse_chan_time(ah['camera_trigger_out_line'],
-                                                                    high_time=self.camera_high_time,
-                                                                    initial_delay=self.camera_delay)
-
-        self.camera_trigger_task.triggers.start_trigger.cfg_dig_edge_start_trig(ah['camera_trigger_source'])
+galvoETLTask.triggers.start_trigger.cfg_dig_edge_start_trig(acquisition_hardware['galvo_etl_task_trigger_source'])
 
 
+# Bundle waveform array for both galvos and both ETLs
+galvoETLTask.write(waveform)
+galvoETLTask.start()
 
 
 # Trigger camera
-camTrigger.write(True)
+camTrigger.write(True, auto_start=True)
 time.sleep(0.001)
-camTrigger.write(False)
+camTrigger.write(False, auto_start = True)
 
-# Count number of edges detected
-print(hSyncCounter.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE))
+# '''Wait until everything is done - this is effectively a sleep function.'''
+galvoETLTask.wait_until_done()
 
-
-hSyncCounter.stop()
-hSyncCounter.close()
+camTrigger.stop()
 camTrigger.close()
+
+galvoETLTask.stop()
+galvoETLTask.close()
+
 
 
 

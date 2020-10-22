@@ -23,8 +23,10 @@ from .mesoSPIM_State import mesoSPIM_StateSingleton
 
 from .devices.filter_wheels.ludlcontrol import LudlFilterwheel
 from .devices.filter_wheels.mesoSPIM_FilterWheel import mesoSPIM_DemoFilterWheel
+from .devices.filter_wheels.asiFilterWheelControl import ASIFilterWheel
 from .devices.zoom.mesoSPIM_Zoom import DynamixelZoom, DemoZoom
 from .mesoSPIM_Stages import mesoSPIM_PIstage, mesoSPIM_DemoStage, mesoSPIM_GalilStages, mesoSPIM_PI_f_rot_and_Galil_xyz_Stages, mesoSPIM_PI_rot_and_Galil_xyzf_Stages, mesoSPIM_PI_rotz_and_Galil_xyf_Stages, mesoSPIM_PI_rotzf_and_Galil_xy_Stages, mesoSPIM_ASI_Stages
+from .devices.lasers import octoDAC_LaserWaveformGenerator as octoDAC
 # from .mesoSPIM_State import mesoSPIM_State
 
 class mesoSPIM_Serial(QtCore.QObject):
@@ -61,8 +63,8 @@ class mesoSPIM_Serial(QtCore.QObject):
         elif self.cfg.filterwheel_parameters['filterwheel_type'] == 'DemoFilterWheel':
             self.filterwheel = mesoSPIM_DemoFilterWheel(self.cfg.filterdict)
         elif self.cfg.filterwheel_parameters['filterwheel_type'] == 'ASI':
-            asiSer = serial.Serial(port = self.cfg.filterwheel_parameters['COMport'], baudrate = self.cfg.filterwheel_parameters['baudrate'])
-            self.filterwheel = asiFilterWheelControl(asiSer, self.cfg.filterdict)
+            self.cfg.asiSer = serial.Serial(port = self.cfg.filterwheel_parameters['COMport'], baudrate = self.cfg.filterwheel_parameters['baudrate'])
+            self.filterwheel = ASIFilterWheel(self.cfg.asiSer, self.cfg.filterdict)
 
         ''' Attaching the zoom '''
         if self.cfg.zoom_parameters['zoom_type'] == 'Dynamixel':
@@ -91,16 +93,12 @@ class mesoSPIM_Serial(QtCore.QObject):
         elif self.cfg.stage_parameters['stage_type'] == 'DemoStage':
             self.stage = mesoSPIM_DemoStage(self)
         elif self.cfg.stage_parameters['stage_type'] == 'ASI':
-            self.stage = mesoSPIM_ASI_Stages(self, asiSerial) # Requires asiSerial object made with the filter wheel.  Otherwise init w/ com port 
+            self.stage = mesoSPIM_ASI_Stages(self) 
         try:
             self.stage.sig_position.connect(self.report_position)
         except:
-            print('Stage not initalized! Please check the configuratio file')
-            
-        ''' Attach laserEnabler '''
-        if self.cfg.laser == 'NicoLase':
-            from .devices.lasers import NicoLase_laserEnabler
-            self.laserEnabler = NicoLase_laserEnabler(self.cfg.laserEnablerPort)
+            print('Stage not initalized! Please check the configuration file')
+        
             
 
         ''' Wiring signals through to child objects '''

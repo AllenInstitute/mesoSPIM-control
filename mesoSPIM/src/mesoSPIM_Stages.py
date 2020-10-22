@@ -63,18 +63,18 @@ class mesoSPIM_Stage(QtCore.QObject):
         self.x_pos, self.y_pos etc are the true axis positions, no matter whether
         the stages are zeroed or not.
         '''
-        self.x_pos = 0
-        self.y_pos = 0
-        self.z_pos = 0
-        self.f_pos = 0
-        self.theta_pos = 0
+        self.x_pos = 0.0
+        self.y_pos = 0.0
+        self.z_pos = 0.0
+        self.f_pos = 0.0
+        self.theta_pos = 0.0
 
         '''Internal (software) positions'''
-        self.int_x_pos = 0
-        self.int_y_pos = 0
-        self.int_z_pos = 0
-        self.int_f_pos = 0
-        self.int_theta_pos = 0
+        self.int_x_pos = 0.0
+        self.int_y_pos = 0.0
+        self.int_z_pos = 0.0
+        self.int_f_pos = 0.0
+        self.int_theta_pos = 0.0
 
         '''Create offsets
 
@@ -89,11 +89,11 @@ class mesoSPIM_Stage(QtCore.QObject):
         self.x_pos = self.int_x_pos - self.int_x_pos_offset
 
         '''
-        self.int_x_pos_offset = 0
-        self.int_y_pos_offset = 0
-        self.int_z_pos_offset = 0
-        self.int_f_pos_offset = 0
-        self.int_theta_pos_offset = 0
+        self.int_x_pos_offset = 0.0
+        self.int_y_pos_offset = 0.0
+        self.int_z_pos_offset = 0.0
+        self.int_f_pos_offset = 0.0
+        self.int_theta_pos_offset = 0.0
 
         '''
         Setting movement limits: currently hardcoded
@@ -282,6 +282,9 @@ class mesoSPIM_Stage(QtCore.QObject):
 class mesoSPIM_DemoStage(mesoSPIM_Stage):
     def __init__(self, parent = None):
         super().__init__(parent)
+    
+    def report_position(self):
+        pass
 
 class mesoSPIM_PIstage(mesoSPIM_Stage):
     '''
@@ -2046,7 +2049,7 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
     Todo: Rotation axes are hardcoded! (M-605: #5, M-061.PD: #6)
     '''
 
-    def __init__(self, COMport, parent = None):
+    def __init__(self, parent = None):
         '''
     	Initialize stage object.
     	Output is some sort of handle to various connected stages
@@ -2062,7 +2065,7 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
     	This can be found with 'WHO' command to MS2000 or TIGER controller, which will return all connected stages w/ letters
     	Such a thing probably can get encoded in .cfg file, or maybe write a parser one day for it.
     	Here assume X, Y, Z, T are specimen X, Y, Z, theta moves.
-    	F, G are X, Y moves of zoom body.
+    	M, N are X, Y moves of zoom body.
     	
     	Galil has port hard-coded into galilcontrol.py.
     	PI can use ConnectUSB method with serial number as input.  Serial number in .cfg file.
@@ -2097,21 +2100,23 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
     	asi_parameters = ['port' : 'COMX']
     	
     	
-    	Inputs : port number ('COM3')
+    	Inputs : port number ('COM3') or existing serial.Serial object
         '''
     
         super().__init__(parent)
 		
-        import ms2000
+        from .devices.stages.asi import ms2000
 
         try:
             # Connect to stage
-            self = ms2000.MS2000(self.cfg.asi_parameters['port'])
-            logger.info('Connected to ASI stage controller on port ' + self.cfg.asi_parameters['port'])
+            # Use already-generated serial.Serial connection as self.cfg.asiSer
+            self.xy_stage = ms2000.MS2000(port = self.cfg.asiSer)
+            logger.info('Connected to ASI stage controller on port ' + self.cfg.asi_parameters['COMport'])
 
         
         except:
-            logger.info('Error while connecting to ASI stage controller on port ' + + self.cfg.asi_parameters['port'])
+            self.xy_stage = ms2000.MS2000(port = self.cfg.asi_parameters['COMport'], baudrate = self.cfg.asi_parameters['baudrate'])
+            logger.info('Error while connecting to ASI stage controller on port ' + self.cfg.asi_parameters['COMport'])
 		
 	
 
@@ -2130,8 +2135,7 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
         except:
             logger.info('Error while disconnecting ASI stage controller')
 			
-
-
+            
     def report_position(self):
         """
 		Return position of stage axis for each axis, in turn
@@ -2140,12 +2144,19 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
 		Do same with internal position 
 				
 		"""
-        self.x_pos = self.getPosition(axis = 'X')
-        self.y_pos = self.getPosition(axis = 'Y')
-        self.z_pos = self.getPosition(axis = 'Z')
-        self.f_pos = self.getPosition(axis = 'F')
-        self.theta_pos = self.getPosition(axis = 'T')
-		
+        
+        [self.x_pos, self.y_pos, self.z_pos, self.f_pos, self.theta_pos] = self.xy_stage.getPosition()
+        
+        
+        """
+        self.x_pos = self.xy_stage.getAxisPosition(axis = 'X')
+        self.y_pos = self.xy_stage.getAxisPosition(axis = 'Y')
+        self.z_pos = self.xy_stage.getAxisPosition(axis = 'Z')
+        self.f_pos = self.xy_stage.getAxisPosition(axis = 'N')
+        self.theta_pos = self.xy_stage.getAxisPosition(axis = 'T')
+		"""
+        
+        
         self.create_position_dict()
         
         self.int_x_pos = self.x_pos + self.int_x_pos_offset
@@ -2153,7 +2164,8 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
         self.int_z_pos = self.z_pos + self.int_z_pos_offset
         self.int_f_pos = self.f_pos + self.int_f_pos_offset
         self.int_theta_pos = self.theta_pos + self.int_theta_pos_offset
-
+        
+    
         self.create_internal_position_dict()
 
         self.sig_position.emit(self.int_position_dict)
@@ -2168,35 +2180,35 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
         if 'x_rel' in dict:
             x_rel = dict['x_rel']
             if self.x_min < self.x_pos + x_rel and self.x_max > self.x_pos + x_rel:
-                self.asiStage.goRelative('X', int(x_rel), wait_until_done)
+                self.xy_stage.goRelative('X', int(x_rel), wait_until_done)
             else:
                 self.sig_status_message.emit('Relative movement stopped: X Motion limit would be reached!',1000)
 
         if 'y_rel' in dict:
             y_rel = dict['y_rel']
             if self.y_min < self.y_pos + y_rel and self.y_max > self.y_pos + y_rel:
-                self.asiStage.goRelative('Y', int(y_rel), wait_until_done)
+                self.xy_stage.goRelative('Y', int(y_rel), wait_until_done)
             else:
                 self.sig_status_message.emit('Relative movement stopped: Y Motion limit would be reached!',1000)
 
         if 'z_rel' in dict:
             z_rel = dict['z_rel']
             if self.z_min < self.z_pos + z_rel and self.z_max > self.z_pos + z_rel:
-                self.asiStage.goRelative('Z', int(z_rel), wait_until_done)
+                self.xy_stage.goRelative('Z', int(z_rel), wait_until_done)
             else:
                 self.sig_status_message.emit('Relative movement stopped: z Motion limit would be reached!',1000)
 
         if 'theta_rel' in dict:
             theta_rel = dict['theta_rel']
-            if self.theta_min < self.theta_pos + theta_rel and self.theta_max > self.theta_pos + theta_rel:
-               self.asiStage.goRelative('T', int(theta_rel), wait_until_done)
+            if (self.theta_min < self.theta_pos + theta_rel) and (self.theta_max > self.theta_pos + theta_rel):
+                self.xy_stage.goRelative('T', theta_rel, wait_until_done)
             else:
-               self.sig_status_message.emit('Relative movement stopped: theta Motion limit would be reached!',1000)
+                self.sig_status_message.emit('Relative movement stopped: theta Motion limit would be reached!',1000)
 
         if 'f_rel' in dict:
             f_rel = dict['f_rel']
             if self.f_min < self.f_pos + f_rel and self.f_max > self.f_pos + f_rel:
-                self.asiStage.goRelative('F', int(f_rel), wait_until_done)
+                self.xy_stage.goRelative('N', int(f_rel), wait_until_done)
             else:
                 self.sig_status_message.emit('Relative movement stopped: f Motion limit would be reached!',1000)
 
@@ -2215,27 +2227,27 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
         if 'x_abs' in dict:
             x_abs = dict['x_abs']
             x_abs = x_abs - self.int_x_pos_offset
-            self.goAbsolute('X', x_abs, wait_until_done)
+            self.xy_stage.goAbsolute('X', x_abs, wait_until_done)
 		
         if 'y_abs' in dict:
             y_abs = dict['y_abs']
             y_abs = y_abs - self.int_y_pos_offset
-            self.goAbsolute('Y', y_abs, wait_until_done)
+            self.xy_stage.goAbsolute('Y', y_abs, wait_until_done)
 			
         if 'z_abs' in dict:
             z_abs = dict['z_abs']
             z_abs = z_abs - self.int_z_pos_offset
-            self.goAbsolute('Z', z_abs, wait_until_done)
+            self.xy_stage.goAbsolute('Z', z_abs, wait_until_done)
 			
         if 'theta_abs' in dict:
             theta_abs = dict['theta_abs']
             theta_abs = theta_abs - self.int_theta_pos_offset
-            self.goAbsolute('T', theta_abs, wait_until_done)
+            self.xy_stage.goAbsolute('T', theta_abs, wait_until_done)
 			
         if 'f_abs' in dict:
             f_abs = dict['f_abs']
             f_abs = f_abs - self.int_f_pos_offset
-            self.goAbsolute('F', f_abs, wait_until_done)
+            self.xy_stage.goAbsolute('F', f_abs, wait_until_done)
 
         if wait_until_done == True:
             self.block_till_controller_is_ready()
@@ -2246,7 +2258,7 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
     	'''
         
         logging.info('Halting stage motion!')
-        self.halt()
+        self.xy_stage.halt()
 		
 
     def load_sample(self, wait_until_done=False):
@@ -2258,7 +2270,7 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
         loadDict = self.create_internal_position_dict()
         loadDict['y_abs'] = self.cfg.stage_parameters['y_load_position']
 
-        self.move_absolute(loadDict, wait_until_done = wait_until_done)
+        self.xy_stage.goAbsolute(loadDict, wait_until_done = wait_until_done)
 
     def unload_sample(self, wait_until_done=False):
         """
@@ -2268,7 +2280,7 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
         unloadDict = self.create_internal_position_dict()
         unloadDict['y_abs'] = self.cfg.stage_parameters['y_unload_position']
 
-        self.move_absolute(unloadDict, wait_until_done = wait_until_done)
+        self.xy_stage.goAbsolute(unloadDict, wait_until_done = wait_until_done)
         
     def go_to_rotation_position(self, wait_until_done=False):
         """
@@ -2280,7 +2292,7 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
         rotDict['y_abs'] = self.y_rot_position
         rotDict['z_abs'] = self.z_rot_position
 		
-        self.move_absolute(rotDict, wait_until_done = wait_until_done)
+        self.xy_stage.goAbsolute(rotDict, wait_until_done = wait_until_done)
 
     def block_till_controller_is_ready(self):
         '''
@@ -2289,10 +2301,17 @@ class mesoSPIM_ASI_Stages(mesoSPIM_Stage):
 		'''
         resp = 'B'
         while resp == 'B':
-            resp = self.getMotorStatus()
+            resp = self.xy_stage.getStatus()
 		
     def goHome(self):
         '''
         Go to home position as defined by controller
         '''
-        self.zero()
+        self.xy_stage.zero()
+        
+    def zero(self):
+        '''
+        Set axes as zero with ASI controller
+        '''
+        self.xy_stage.zero()
+
