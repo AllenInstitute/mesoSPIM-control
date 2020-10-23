@@ -3,8 +3,6 @@
 Created on Fri Mar 27 14:51:24 2020
 
 @author: Rusty Nicovich
-
-Arduino communication sends each line with ('\r\n' appended)
 """
 
 import numpy as np
@@ -13,13 +11,11 @@ import serial
 
 class octoDAC_LaserWaveformGenerator:
     
-    def __init__(self, serialObject, waitTime = 0.01, endOfLineChar = '\n', verbose = False, ENCODING = 'utf-8', timeout = 1):
+    def __init__(self, serialObject, waitTime = 10, endOfLineChar = '\n', verbose = False):
         
         self.end_of_line = endOfLineChar # newline character
         self.wait_time = waitTime
         self.verbose = verbose
-        self.ENCODING = ENCODING
-        self.timeOut = timeout
         
         if isinstance(serialObject, serial.Serial):
             
@@ -27,43 +23,30 @@ class octoDAC_LaserWaveformGenerator:
             self.ser = serialObject
         elif isinstance(serialObject, str):
             # Open new serial port object
-            self.ser = serial.Serial(port = serialObject, baudrate = 115200, timeout = self.timeOut)
-            
-        time.sleep(1.5) # Arduino resets on serial connection. Give it time to complete.
-            
-    def readUntil(self, serial, eolChar = '\n'):
-        readDone = False
-        response = ''
-        while not readDone:
-            response += serial.read().decode(self.ENCODING)
-            print(response)
-            if eolChar in response:
-                print(response)
-                readDone = True
-        return response
-            
+            self.ser = serial.Serial(port = serialObject, baudrate = 115200)
             
     def sendCommand(self, command):
         self.ser.flush()
-        time.sleep(self.wait_time)
         outString = command + self.end_of_line
-        retCode = self.ser.write(outString.encode(self.ENCODING))
-        self.ser.flush()   
+        self.ser.write(outString.encode())
+            
             
     def writeAndRead(self, command):
-
         """
-        Helper function for sending to serial port, returning line
+        Send a command and wait (a little) for a response.
         """
-
-        sendString = command + self.end_of_line
-        retCode = self.ser.write(sendString.encode(self.ENCODING))
-        ret = self.ser.readline().decode(self.ENCODING).strip('\r\n')
-
-        if self.verbose:
-            print(ret)
+        self.sendCommand(command)
+        time.sleep(10 * self.wait_time)
+        response = ""
+        response_len = self.ser.inWaiting()
+        while response_len:
+            response += self.ser.read(response_len)
+            time.sleep(self.ser.wait_time)
+            response_len = self.ser.inWaiting()
+        if len(response) > 0:
+            return response
             
-        return ret
+
     
     def setChannel(self, chan, setVal):
         """ 
