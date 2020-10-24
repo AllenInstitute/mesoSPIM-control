@@ -963,19 +963,15 @@ class mesoSPIM_WaveFormGeneratorNI_octoDAC(mesoSPIM_WaveFormGenerator):
         
         '''
         # Waveform has waypoints:
-            time                                       value
-            0                                          0
-            sweeptime*delay                            laserAmplitude
-            sweeptime*delay + sweeptime*pulse          laserAmplitude
-            sweeptime*delay + sweeptime*pulse          0
-            sweeptime                                  0
+            time                                                      value
+            laser_l_delay * sweeptime                                 laserAmplitude
+            sweeptime * laser_l_delay + sweeptime*laser_l_pulse       0
             
         # Points fed to octoDAC need to only be changes in intensity.
         '''
     
-        laserWaveform = np.array([[current_laser_index, 0, 0], 
-                                  [current_laser_index, int(sweeptime*laser_l_delay*1e6), laserAmplitude], 
-                                  [current_laser_index, int(sweeptime*laser_l_delay*1e6 + sweeptime*laser_l_pulse*1e6), 0]])
+        laserWaveform = np.array([[current_laser_index, int(sweeptime*laser_l_delay*1e6*1e-2), laserAmplitude], 
+                                  [current_laser_index, int(sweeptime*(laser_l_delay + laser_l_pulse)*1e6*1e-2), 0]])
 
         self.laser_waveforms = laserWaveform
         
@@ -1093,7 +1089,11 @@ class mesoSPIM_WaveFormGeneratorNI_octoDAC(mesoSPIM_WaveFormGenerator):
         For this to work, all analog output and counter tasks have to be started so
         that they are waiting for the trigger signal.
         '''
-        self.master_trigger_task.write([False, True, True, True, False], auto_start=True)
+        self.master_trigger_task.write(True, auto_start = True)
+        time.sleep(0.001)
+        self.master_trigger_task.write(False, auto_start = True)
+        
+        #self.master_trigger_task.write([False, True, True, True, False], auto_start=True)
         print('Master trigger out!')
 
         '''Wait until everything is done - this is effectively a sleep function.'''

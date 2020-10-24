@@ -88,6 +88,8 @@ class octoDAC_LaserWaveformGenerator:
 							[{channel, timepoint, amplitude],...]
 		
 		"""
+        self.ser.reset_input_buffer()
+        self.ser.reset_output_buffer()
 		
         if len(waveArray.shape) == 1:
 			# Array is single row
@@ -95,7 +97,9 @@ class octoDAC_LaserWaveformGenerator:
 											   str(int(waveArray[1])), 
 											   str(int(waveArray[2])))
 		
-            self.sendCommand(uploadString)
+            ret = self.writeAndRead(uploadString)
+            if self.verbose:
+                print(ret)
 			
         else:
 		
@@ -115,8 +119,13 @@ class octoDAC_LaserWaveformGenerator:
                 uploadString = 'a {};{};{}'.format(str(int(wv[0])), 
 											   str(int(wv[1])), 
 											   str(int(wv[2])))
+                
 		
-            self.sendCommand(uploadString)            
+                ret = self.writeAndRead(uploadString)            
+                time.sleep(0.01)
+                
+            if self.verbose:
+                print(ret)
         
         
     # c
@@ -140,6 +149,8 @@ class octoDAC_LaserWaveformGenerator:
         """ 
 		Free-run waveform until stop command is given.
 		"""
+        self.ser.reset_input_buffer()
+        self.ser.reset_output_buffer()
         ret = self.writeAndRead('f')
 		
 	# k 
@@ -148,6 +159,13 @@ class octoDAC_LaserWaveformGenerator:
 		Stop a free-running waveform after next loop.
 		"""
         ret = self.writeAndRead('k')
+        
+    # m
+    def invokeTestPattern(self):
+        '''
+        Make all channels flash at ~4 Hz.
+        '''
+        ret = self.writeAndRead('m')
 		
 	# n 
     def singleShotWaveform(self):

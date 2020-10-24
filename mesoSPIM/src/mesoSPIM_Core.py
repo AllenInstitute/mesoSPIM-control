@@ -498,21 +498,12 @@ class mesoSPIM_Core(QtCore.QObject):
         '''
 
         self.waveformer.create_tasks()
-        print('tasks created')
-        
         self.waveformer.write_waveforms_to_tasks()
-        print('written waveforms')
-        
         self.waveformer.start_tasks()
-        print('tasks started')
-        
         self.waveformer.run_tasks()
-        print('tasks run')
         self.waveformer.stop_tasks()
-        print('tasks stopped')
         self.waveformer.close_tasks()
-        print('tasks closed')
-
+        
     def prepare_image_series(self):
         '''Prepares an image series without waveform update'''
         self.waveformer.create_tasks()

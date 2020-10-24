@@ -12,7 +12,7 @@ masterSettings = {'waveformGenerator' : 'NI+octoDAC', # 'DemoWaveFormGeneration'
                   'sidepanel' : 'Demo',  #'Demo' or 'FarmSimulator'
                   'laser' : 'octoDAC', # 'Demo' or 'NI' or 'octoDAC'
                   'shutter' : 'NI', # 'Demo' or 'NI', 
-                  'camera' : 'DemoCamera', # 'DemoCamera' or 'HamamatsuOrca' or 'PhotometricsIris15'
+                  'camera' : 'HamamatsuOrca', # 'DemoCamera' or 'HamamatsuOrca' or 'PhotometricsIris15'
                   'stage' : 'ASI', # 'DemoStage' or 'PI' or 'ASI' other configs found in mesoSPIM_serial.py
                   'filterwheel' : 'ASI', # 'DemoFilterWheel' or 'Ludl' or 'ASI'}
                   'zoomModule' : 'Dynamixel'} # 'DemoZoom' or 'Dynamixel'
@@ -94,24 +94,24 @@ if laser == 'octoDAC':
     
     # Key is laser name in GUI
     # Value is string for octoDAC channel 
-	laserdict = {'405 nm': 'octoDAC:0',
-				 '488 nm': 'octoDAC:1',
-				 '552 nm': 'octoDAC:2',
-				 '594 nm': 'octoDAC:3',
-				 '647 nm': 'octoDAC:4'}
+	laserdict = {'405 nm': 'octoDAC:1',
+				 '488 nm': 'octoDAC:2',
+				 '552 nm': 'octoDAC:3',
+				 '594 nm': 'octoDAC:4',
+				 '647 nm': 'octoDAC:5'}
 
 	# COM port for NicoLase/octoDAC		 
 	laserEnablerPort = 'COM3'
 	
 	# octoDAC connections
-	laser_designation = {'405 nm' : 0,
-                     '488 nm' : 1,
-                     '552 nm' : 2,
-                     '594 nm' : 3,
-                     '647 nm' : 4,
-                     'Empty 0' : 5,
-                     'Empty 1' : 6,
-                     'Empty 2' : 7
+	laser_designation = {'405 nm' : 1,
+                     '488 nm' : 2,
+                     '552 nm' : 3,
+                     '594 nm' : 4,
+                     '647 nm' : 5,
+                     'Empty 0' : 6,
+                     'Empty 1' : 7,
+                     'Empty 2' : 8
                      }
 
 
@@ -436,7 +436,7 @@ startup = {
 'max_laser_voltage':5,
 'intensity' : 10,
 'shutterstate':False, # Is the shutter open or not?
-'shutterconfig':'Right', # Can be "Left", "Right","Both","Interleaved"
+'shutterconfig':'Both', # Can be "Left", "Right","Both","Interleaved"
 'laser_interleaving':False,
 'filter' : '510-42',
 'etl_l_delay_%' : 7.5,
@@ -459,10 +459,10 @@ startup = {
 'galvo_r_offset' : 0,
 'galvo_r_duty_cycle' : 50,
 'galvo_r_phase' : np.pi/2,
-'laser_l_delay_%' : 10,
+'laser_l_delay_%' : 10, # % of sweeptime
 'laser_l_pulse_%' : 87,
 'laser_l_max_amplitude_%' : 100,
-'laser_r_delay_%' : 10,
+'laser_r_delay_%' : 10, # seconds! NB - laser_r_delay and laser_l_delay are redundant. Only laser_l_delay used
 'laser_r_pulse_%' : 87,
 'laser_r_max_amplitude_%' : 100,
 'camera_delay_%' : 10,
